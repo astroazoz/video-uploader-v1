@@ -8,6 +8,7 @@ Only use it for videos you own or have permission to save.
 ## Features
 - Paste a link: platform is detected and a preview (thumbnail, title, length, stats) is shown first
 - Choose quality and format (MP4 H.264, MP4 original codec, or MP3 audio)
+- Photo posts from X are saved at original quality (a folder when there are several) and open in a photo viewer
 - Built-in library (grid or list), in-app player, open folder / copy link / delete to Recycle Bin
 - Optional connected accounts (TikTok, Instagram, X) so posts your own account may view can be saved
 

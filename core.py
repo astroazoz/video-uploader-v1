@@ -99,7 +99,8 @@ def fmt_upload_date(s) -> str:
 def friendly_error(err: str, ctx=None) -> str:
     e = ANSI_RE.sub("", err).lower()
     if "no video" in e or "no media" in e or "there is no video" in e or "photo" in e or "slideshow" in e:
-        return "that post doesn't contain a video (photo and slideshow posts aren't supported)."
+        return ("that post has no video. photo posts can be saved from X; instagram and tiktok photo "
+                "posts and slideshows aren't supported yet.")
     if "unexpected response from webpage" in e or "impersonat" in e or "challenge" in e or "captcha" in e:
         return ("the site blocked the request with an anti-bot check. wait a moment and press RETRY. "
                 "if it keeps happening, rebuild the app (build.bat) to refresh its downloader.")
@@ -111,8 +112,8 @@ def friendly_error(err: str, ctx=None) -> str:
                     "isn't allowed to see, the session may have expired (check ACCOUNTS), or the platform doesn't offer "
                     "this video for download. the app never bypasses privacy settings.")
         if plat:
-            return (f"this post looks private or needs a sign-in. open ACCOUNTS and connect a {plat} account that is "
-                    "allowed to see it, then try again. the app can only save what that account itself can view.")
+            return (f"this post looks private, age-restricted or needs a sign-in. open ACCOUNTS and connect an account on "
+                    f"{plat} that is allowed to see it, then try again. the app can only save what that account itself can view.")
         return "this post is private or needs a sign-in, so it can't be downloaded."
     if "drm" in e:
         return "this video is DRM-protected and can't be downloaded."
@@ -196,10 +197,23 @@ def make_thumb(video_path: str, entry_id: str, fallback: bytes | None, audio: bo
     return None
 
 
+def make_image_thumb(image_path: str, entry_id: str) -> str | None:
+    """Small JPEG thumbnail for a saved photo."""
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    img = QImage(image_path)
+    if img.isNull():
+        return None
+    out = THUMB_DIR / f"{entry_id}.jpg"
+    img.scaledToWidth(480, Qt.SmoothTransformation).save(str(out), "JPG", 85)
+    return str(out) if out.exists() else None
+
+
 def open_folder_of(path: str) -> None:
     p = Path(path)
     try:
-        if p.exists():
+        if p.is_dir():
+            os.startfile(p)  # noqa: S606
+        elif p.exists():
             subprocess.Popen(["explorer", "/select,", str(p)])
         else:
             os.startfile(p.parent if p.parent.exists() else DATA_DIR)  # noqa: S606
@@ -279,6 +293,50 @@ def run_ytdlp(plat: str | None, make_opts, work):
     return attempt(None)
 
 
+X_ID_RE = re.compile(r"/status(?:es)?/(\d+)")
+IMAGE_EXTS = ("jpg", "jpeg", "png", "webp")
+
+
+class PostHidden(Exception):
+    """The platform returned nothing for this post to the current (signed-out) session."""
+
+
+def x_status(ydl, url: str) -> dict:
+    """The post record for an X link, read through yt-dlp's maintained X access.
+
+    Uses the connected account's session when one is set up, so posts that account may see are readable.
+    """
+    m = X_ID_RE.search(url)
+    if not m:
+        return {}
+    ie = ydl.get_info_extractor("Twitter")
+    return ie._extract_status(m.group(1)) or {}
+
+
+def x_photos(status: dict) -> list[dict]:
+    out = []
+    for m in (status.get("extended_entities") or {}).get("media") or []:
+        url = m.get("media_url_https") or m.get("media_url")
+        if m.get("type") == "photo" and url:
+            oi = m.get("original_info") or {}
+            out.append({"url": url, "w": oi.get("width"), "h": oi.get("height")})
+    return out
+
+
+def photo_candidates(im: dict) -> list[str]:
+    """Original resolution first, then the plain URL as a fallback."""
+    return [im["url"] + ":orig", im["url"]]
+
+
+def photo_ext(url: str) -> str:
+    ext = url.split("?")[0].rsplit(".", 1)[-1].lower()
+    return ext if ext in IMAGE_EXTS else "jpg"
+
+
+def http_get(url: str, timeout: int = 30) -> bytes:
+    return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout).read()
+
+
 class FetchTask(QRunnable):
     def __init__(self, token: int, url: str):
         super().__init__()
@@ -324,7 +382,43 @@ class FetchTask(QRunnable):
             }
             self.s.info.emit(self.token, summary)
         except Exception as e:  # noqa: BLE001
+            if plat == "X" and "no video" in str(e).lower():
+                try:  # no video: it may be a photo post
+                    self.s.info.emit(self.token, self._photo_summary(plat))
+                    return
+                except Exception as e2:  # noqa: BLE001
+                    e = e2
             self.s.info_err.emit(self.token, friendly_error(str(e), account_ctx(plat)))
+
+    def _photo_summary(self, plat: str) -> dict:
+        st = run_ytdlp(plat, base_opts, lambda ydl: x_status(ydl, self.url))
+        photos = x_photos(st)
+        text = (st.get("full_text") or st.get("text") or "").strip()
+        user = st.get("user") or {}
+        if not photos:
+            if not user and not text:  # X gave nothing back: hidden from this (signed-out) session
+                raise PostHidden("this post is hidden from signed-out visitors: sign in required")
+            raise RuntimeError("no video")  # a text-only post
+        clean = re.sub(r"\s*https?://t\.co/\S+", "", text).strip()
+        title = " ".join(clean.split())[:160] or "Photo post"
+        thumb = None
+        try:
+            thumb = http_get(photos[0]["url"] + ":medium", 20)
+        except Exception:  # noqa: BLE001
+            try:
+                thumb = http_get(photos[0]["url"], 20)
+            except Exception:  # noqa: BLE001
+                thumb = None
+        date = ""
+        try:
+            date = datetime.strptime(st.get("created_at", ""), "%a %b %d %H:%M:%S %z %Y").strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001
+            pass
+        m = X_ID_RE.search(self.url)
+        return {"url": self.url, "platform": plat, "id": m.group(1) if m else "post", "kind": "images", "images": photos,
+                "title": title, "description": clean if clean and " ".join(clean.split()) != title else "",
+                "uploader": user.get("screen_name") or user.get("name") or "", "duration": None, "views": None,
+                "likes": st.get("favorite_count"), "date": date, "thumb": thumb, "heights": []}
 
 
 class DownloadTask(QRunnable):
@@ -395,8 +489,50 @@ class DownloadTask(QRunnable):
                 except OSError:
                     pass
 
+    def _run_images(self) -> dict:
+        """Save a photo post: one file for a single photo, a folder (01.jpg, 02.jpg, ...) for several."""
+        s = self.summary
+        imgs = s["images"]
+        out = Path(self.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        base = yt_dlp.utils.sanitize_filename(f"{s.get('uploader') or 'photo'} - {s.get('id')}", restricted=False)[:120]
+        n = len(imgs)
+        folder = out / base
+        if n > 1:
+            folder.mkdir(exist_ok=True)
+        files: list[str] = []
+        for i, im in enumerate(imgs, 1):
+            if self.cancelled:
+                raise Cancelled()
+            data, last = None, None
+            for u in photo_candidates(im):
+                for _ in range(2):
+                    try:
+                        data = http_get(u)
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        last = e
+                if data:
+                    break
+            if not data:
+                raise RuntimeError(f"couldn't download photo {i} of {n} ({last})")
+            ext = photo_ext(im["url"])
+            f = (out / f"{base}.{ext}") if n == 1 else (folder / f"{i:02d}.{ext}")
+            f.write_bytes(data)
+            files.append(str(f))
+            self.s.progress.emit(self.token, min(i / n, 0.99), f"photo {i} of {n}")
+        path = files[0] if n == 1 else str(folder)
+        eid = uuid.uuid4().hex[:12]
+        return {"id": eid, "title": s["title"], "platform": s["platform"], "url": s["url"], "path": path,
+                "filename": Path(path).name, "date": datetime.now().isoformat(timespec="seconds"), "duration": None,
+                "size": sum(os.path.getsize(f) for f in files), "uploader": s["uploader"], "kind": "image",
+                "images": n, "files": files, "thumb": make_image_thumb(files[0], eid)}
+
     def run(self):
         try:
+            if self.summary.get("kind") == "images":
+                self.s.done.emit(self.token, self._run_images())
+                return
             out = Path(self.out_dir)
             out.mkdir(parents=True, exist_ok=True)
             opts = base_opts()

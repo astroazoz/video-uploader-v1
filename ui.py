@@ -149,6 +149,14 @@ def wrapped_text(p: QPainter, text: str, rect: QRect, max_lines: int) -> None:
     layout.endLayout()
 
 
+def entry_badge(e: dict) -> str:
+    """Short label shown on a card: length for videos, photo count for photo posts, MP3 for audio."""
+    if e.get("kind") == "image":
+        n = e.get("images") or 1
+        return f"{n} photo{'s' if n != 1 else ''}"
+    return fmt_duration(e.get("duration")) or ("MP3" if e.get("kind") == "audio" else "")
+
+
 def entry_date(e: dict) -> str:
     try:
         return datetime.fromisoformat(e["date"]).strftime("%b %d, %Y")
@@ -291,7 +299,7 @@ class GridDelegate(_DelegateBase):
         tr = QRect(int(r.x()) + 10, int(r.y()) + 10, int(r.width()) - 20, self.thumb_h(self.W))
         p.drawPixmap(tr.topLeft(), G.framed_pixmap(e.get("thumb"), tr.width(), tr.height(), 15, cache=self.cache))
         draw_capsule(p, tr.x() + 8, tr.y() + 8, PLATFORM_TAG.get(e.get("platform"), "VIDEO"))
-        dur = fmt_duration(e.get("duration")) or ("MP3" if e.get("kind") == "audio" else "")
+        dur = entry_badge(e)
         if dur:
             w = QFontMetrics(G.font(8, SEMI)).horizontalAdvance(dur) + 18
             draw_capsule(p, tr.right() - w - 6, tr.bottom() - 28, dur)
@@ -350,7 +358,7 @@ class ListDelegate(_DelegateBase):
             p.drawPath(edge)
         tr = QRect(int(r.x()) + 10, int(r.y()) + 9, 104, 58)
         p.drawPixmap(tr.topLeft(), G.framed_pixmap(e.get("thumb"), tr.width(), tr.height(), 12, cache=self.cache))
-        cols = [(92, PLATFORM_TAG.get(e.get("platform"), "VIDEO")), (66, fmt_duration(e.get("duration")) or ("mp3" if e.get("kind") == "audio" else "-")),
+        cols = [(92, PLATFORM_TAG.get(e.get("platform"), "VIDEO")), (66, entry_badge(e).lower() or "-"),
                 (86, fmt_size(e.get("size")) or "-"), (104, entry_date(e) or "-")]
         x = r.right() - 16 - 100 - 14 - sum(w for w, _ in cols)
         p.setFont(G.font(9))
@@ -552,6 +560,150 @@ class PlayerDialog(G.GlassDialog):
         super().done(r)
 
 
+class ImageViewer(G.GlassDialog):
+    """Photo viewer for saved photo posts (one photo, or a folder of several)."""
+
+    def __init__(self, win: "MainWindow", entry: dict):
+        super().__init__(win)
+        self.win, self.entry, self.idx = win, entry, 0
+        files = [f for f in (entry.get("files") or []) if Path(f).exists()]
+        if not files:
+            p = Path(entry["path"])
+            files = sorted(str(x) for x in p.iterdir() if x.suffix.lower().lstrip(".") in ("jpg", "jpeg", "png", "webp")) \
+                if p.is_dir() else [str(p)]
+        self.files = files
+        self.setWindowTitle(entry.get("title") or "Photos")
+        self.resize(1000, 820)
+        self.setMinimumSize(760, 660)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(26, 22, 26, 22)
+        root.setSpacing(16)
+
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        t = QLabel(entry.get("title") or entry["filename"])
+        t.setFont(G.font(13, SEMI))
+        t.setMaximumWidth(680)
+        top.addWidget(t, 1)
+        top.addWidget(Chip(entry.get("platform") or "Photo"))
+        top.addWidget(Chip(entry_badge(entry)))
+        root.addLayout(top)
+
+        vp = G.GlassPanel(26, 0.7, grain=False)
+        vl = QVBoxLayout(vp)
+        vl.setContentsMargins(10, 10, 10, 10)
+        self.view = QLabel()
+        self.view.setAlignment(Qt.AlignCenter)
+        self.view.setMinimumSize(420, 300)
+        self.view.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        vl.addWidget(self.view)
+        root.addWidget(vp, 1)
+
+        nav = G.GlassPanel(28, 0.9, grain=False)
+        nl = QHBoxLayout(nav)
+        nl.setContentsMargins(14, 8, 14, 8)
+        self.prev_btn = G.IconButton("prev", 42, "glass", "Previous photo (Left arrow)")
+        self.next_btn = G.IconButton("next", 42, "glass", "Next photo (Right arrow)")
+        self.counter = QLabel("")
+        self.counter.setAlignment(Qt.AlignCenter)
+        self.counter.setFont(G.font(10, SEMI))
+        self.prev_btn.clicked.connect(lambda: self.step(-1))
+        self.next_btn.clicked.connect(lambda: self.step(1))
+        nl.addWidget(self.prev_btn)
+        nl.addWidget(self.counter, 1)
+        nl.addWidget(self.next_btn)
+        nav.setVisible(len(files) > 1)
+        root.addWidget(nav)
+
+        ip = G.GlassPanel(24, 0.8, grain=False)
+        grid = QGridLayout(ip)
+        grid.setContentsMargins(22, 16, 22, 16)
+        grid.setHorizontalSpacing(22)
+        grid.setVerticalSpacing(8)
+        try:
+            date = datetime.fromisoformat(entry["date"]).strftime("%B %d, %Y  at  %H:%M")
+        except Exception:
+            date = "-"
+        link = entry.get("url") or ""
+        rows = [("Platform", entry.get("platform") or "-"),
+                ("Source link", f'<a href="{link}" style="color:{ACCENT}">{link}</a>' if link else "-"),
+                ("Saved as", ("Folder: " if len(files) > 1 else "") + entry["filename"]), ("Saved", date),
+                ("Details", "  \u00b7  ".join((entry_badge(entry), fmt_size(entry.get("size")), "Original quality")))]
+        for i, (k, v) in enumerate(rows):
+            kl = QLabel(k)
+            kl.setObjectName("muted")
+            kl.setAlignment(Qt.AlignTop)
+            vl3 = QLabel(v)
+            vl3.setWordWrap(True)
+            vl3.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+            vl3.setOpenExternalLinks(True)
+            grid.addWidget(kl, i, 0)
+            grid.addWidget(vl3, i, 1)
+        grid.setColumnStretch(1, 1)
+        root.addWidget(ip)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(10)
+        for text, icon, fn in (("Open folder", "folder", lambda: open_folder_of(entry["path"])),
+                               ("Copy link", "copy", lambda: win.copy_link(entry)),
+                               ("Unhide" if entry.get("hidden") else "Hide", "eye" if entry.get("hidden") else "eye-off", self.toggle_hide)):
+            b = G.GlassButton(text, icon, height=42)
+            b.clicked.connect(fn)
+            btns.addWidget(b)
+        btns.addStretch(1)
+        d = G.GlassButton("Delete", "trash", "danger", height=42)
+        d.clicked.connect(self.delete)
+        c_ = G.GlassButton("Close", None, "primary", height=42)
+        c_.setMinimumWidth(110)
+        c_.clicked.connect(self.accept)
+        btns.addWidget(d)
+        btns.addWidget(c_)
+        root.addLayout(btns)
+        self._show()
+
+    def _show(self):
+        n = len(self.files)
+        self.prev_btn.setEnabled(self.idx > 0)
+        self.next_btn.setEnabled(self.idx < n - 1)
+        self.counter.setText(f"{self.idx + 1} of {n}")
+        if not self.files:
+            self.view.setText("No photos found")
+            return
+        w, h = max(200, self.view.width()), max(150, self.view.height())
+        self.view.setPixmap(G.framed_pixmap(self.files[self.idx], w, h, 18))
+
+    def step(self, d: int):
+        j = self.idx + d
+        if 0 <= j < len(self.files):
+            self.idx = j
+            self._show()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, "view") and self.files:
+            self._show()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        QTimer.singleShot(0, self._show)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Left:
+            self.step(-1)
+        elif e.key() == Qt.Key_Right:
+            self.step(1)
+        else:
+            super().keyPressEvent(e)
+
+    def toggle_hide(self):
+        self.win.toggle_hidden(self.entry)
+        self.accept()
+
+    def delete(self):
+        if self.win.delete_entry(self.entry, self):
+            self.accept()
+
+
 class AccountsDialog(G.GlassDialog):
     """Connected accounts: connect / reconnect / disconnect TikTok, Instagram and X."""
     changed = Signal()
@@ -711,6 +863,7 @@ class MainWindow(QMainWindow):
         self.dl_task: DownloadTask | None = None
         self.busy = False
         self.last_clip = None
+        self.is_images = False
         self.lib_tab = "library"
         self.grid_delegate = GridDelegate(self)
         self.list_delegate = ListDelegate(self)
@@ -965,7 +1118,7 @@ class MainWindow(QMainWindow):
 
         tiles = QHBoxLayout()
         tiles.setSpacing(12)
-        self.tiles: dict[str, tuple[G.GlassPanel, QLabel]] = {}
+        self.tiles: dict[str, tuple[G.GlassPanel, QLabel, QLabel]] = {}
         for key, label in (("length", "Length"), ("views", "Views"), ("likes", "Likes"), ("date", "Posted")):
             tp = G.GlassPanel(18, 0.55, shadow=False, grain=False)
             tp.setFixedHeight(68)
@@ -975,12 +1128,13 @@ class MainWindow(QMainWindow):
             lb = QLabel(label)
             lb.setObjectName("muted")
             lb.setFont(G.font(8.5))
+            lb_ref = lb
             val = QLabel("")
             val.setFont(G.font(14, QFont.Weight.Medium))
             tl.addWidget(lb)
             tl.addWidget(val)
             tiles.addWidget(tp, 1)
-            self.tiles[key] = (tp, val)
+            self.tiles[key] = (tp, val, lb_ref)
         col.addLayout(tiles)
         return w
 
@@ -1108,7 +1262,9 @@ class MainWindow(QMainWindow):
         ev.addWidget(self.empty_sub, 0, Qt.AlignHCenter)
         ev.addStretch(1)
         self.empty_title.setAlignment(Qt.AlignHCenter)
-        self.empty_sub.setAlignment(Qt.AlignHCenter)
+        self.empty_sub.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.empty_sub.setFixedWidth(540)
+        self.empty_sub.setMinimumHeight(48)
         self.listw = Gallery()
         self.listw.setResizeMode(QListWidget.Adjust)
         self.listw.setMovement(QListWidget.Static)
@@ -1260,6 +1416,9 @@ class MainWindow(QMainWindow):
         self.token += 1
         self.fetched_url = url
         self.summary = None
+        self.is_images = False
+        self.fmt.setEnabled(True)
+        self.dl_btn.setText("Download")
         self.dl_btn.setEnabled(False)
         self.dl_state.setText("Reading the post")
         self.stack.setCurrentIndex(1)
@@ -1290,11 +1449,16 @@ class MainWindow(QMainWindow):
         desc = s["description"]
         self.p_desc.setText(desc)
         self.p_desc.setVisible(bool(desc))
-        vals = {"length": fmt_duration(s["duration"]), "views": fmt_count(s["views"]) if s["views"] is not None else "",
+        self.is_images = s.get("kind") == "images"
+        n_img = len(s.get("images") or [])
+        vals = {"length": str(n_img) if self.is_images else fmt_duration(s["duration"]),
+                "views": fmt_count(s["views"]) if s["views"] is not None else "",
                 "likes": fmt_count(s["likes"]) if s["likes"] is not None else "", "date": s["date"]}
-        for key, (panel, lab) in self.tiles.items():
+        for key, (panel, lab, cap) in self.tiles.items():
             lab.setText(vals[key])
             panel.setVisible(bool(vals[key]))
+            if key == "length":
+                cap.setText("Photos" if self.is_images else "Length")
         self.q_combo.blockSignals(True)
         self.q_combo.clear()
         self.q_combo.addItem("Best available", None)
@@ -1308,13 +1472,26 @@ class MainWindow(QMainWindow):
             it = self.q_chips.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
-        for h, meta in s["heights"][:4]:
-            self.q_chips.addWidget(Chip(f"{min(meta['w'] or h, h)}p"))
+        if self.is_images:
+            self.q_combo.blockSignals(True)
+            self.q_combo.clear()
+            self.q_combo.addItem("Original", None)
+            self.q_combo.blockSignals(False)
+            im0 = s["images"][0]
+            if im0.get("w") and im0.get("h"):
+                self.q_chips.addWidget(Chip(f"{im0['w']} \u00d7 {im0['h']}"))
+            self.q_chips.addWidget(Chip("Original quality"))
+        else:
+            for h, meta in s["heights"][:4]:
+                self.q_chips.addWidget(Chip(f"{min(meta['w'] or h, h)}p"))
         self.q_chips.addStretch(1)
         self.fmt.setIndex(0, animate=False)
-        self.q_combo.setEnabled(True)
+        self.fmt.setEnabled(not self.is_images)
+        self.q_combo.setEnabled(not self.is_images)
+        self.dl_btn.setText(self._dl_label())
         self.dl_status.setStyleSheet("")
-        self.dl_status.setText("Choose a format and quality, then press Download.")
+        self.dl_status.setText("Photos are saved at their original quality." if self.is_images
+                               else "Choose a format and quality, then press Download.")
         self.dl_btn.setEnabled(True)
         self.dl_state.setText("Ready")
         self._idle_dial()
@@ -1325,8 +1502,15 @@ class MainWindow(QMainWindow):
         self.q_combo.setEnabled(i != 1 and not self.busy)
         self._idle_dial()
 
+    def _dl_label(self) -> str:
+        return "Download photos" if self.is_images else "Download"
+
     def _idle_dial(self):
         if self.busy:
+            return
+        if self.is_images:
+            n = len((self.summary or {}).get("images") or [])
+            self.dial.set_idle(f"{n} photo{'s' if n != 1 else ''}", "original quality")
             return
         if self.fmt.index() == 1:
             big = "MP3"
@@ -1341,10 +1525,11 @@ class MainWindow(QMainWindow):
         for w in (self.url_input, self.paste_btn, self.q_combo, self.fmt, self.dir_btn):
             w.setEnabled(not busy)
         if not busy:
-            self.q_combo.setEnabled(self.fmt.index() != 1)
+            self.fmt.setEnabled(not self.is_images)
+            self.q_combo.setEnabled(self.fmt.index() != 1 and not self.is_images)
         self.dl_btn.setEnabled(not busy and self.summary is not None)
         self.cancel_btn.setVisible(busy)
-        self.dl_btn.setText("Downloading..." if busy else "Download")
+        self.dl_btn.setText("Downloading..." if busy else self._dl_label())
         self.dl_state.setText("Downloading" if busy else "Ready")
         self._set_status_text()
 
@@ -1352,10 +1537,10 @@ class MainWindow(QMainWindow):
         if self.busy or not self.summary:
             return
         self.token += 1
-        audio = self.fmt.index() == 1
+        audio = self.fmt.index() == 1 and not self.is_images
         tag = "" if audio or self.q_combo.currentData() is None else self.q_combo.currentText().split()[0]
         task = DownloadTask(self.token, self.summary, self.save_dir, self.q_combo.currentData(), audio, tag,
-                            compat=self.fmt.index() == 0)
+                            compat=self.fmt.index() == 0 and not self.is_images)
         task.s.progress.connect(self.on_progress)
         task.s.done.connect(self.on_done)
         task.s.fail.connect(self.on_fail)
@@ -1498,7 +1683,7 @@ class MainWindow(QMainWindow):
                 self.lib.remove(e)
                 self.refresh_library()
             return
-        PlayerDialog(self, e).exec()
+        (ImageViewer if e.get("kind") == "image" else PlayerDialog)(self, e).exec()
         self.refresh_library()
 
     def copy_link(self, e: dict):
@@ -1537,7 +1722,7 @@ class MainWindow(QMainWindow):
             return
         e = it.data(Qt.UserRole)
         m = QMenu(self)
-        m.addAction("Play", lambda: self.open_entry(e))
+        m.addAction("View photos" if e.get("kind") == "image" else "Play", lambda: self.open_entry(e))
         m.addAction("Open folder", lambda: open_folder_of(e["path"]))
         m.addAction("Copy original link", lambda: self.copy_link(e))
         m.addAction("Unhide (restore to library)" if e.get("hidden") else "Hide from library",
