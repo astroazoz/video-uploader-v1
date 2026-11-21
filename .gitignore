@@ -1,0 +1,13 @@
+# build output
+dist/
+build/
+*.spec
+build.log
+__pycache__/
+*.pyc
+# never commit session data or local app data
+vault.json
+library.json
+config.json
+thumbs/
+*.tmp
