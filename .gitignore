@@ -15,3 +15,4 @@ thumbs/
 # installer build output
 installer_output/
 installer_build.log
+*.log

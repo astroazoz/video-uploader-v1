@@ -41,7 +41,8 @@ To run without building: `pip install PySide6 "yt-dlp[curl-cffi]" curl_cffi imag
 - `app.py` entry point
 - `core.py` link handling, yt-dlp fetch and download tasks, library storage (no UI)
 - `accounts.py` encrypted account sessions and cookie files
-- `glass.py` the frosted-glass design system (panels, buttons, progress dial, icons, theme)
+- `hud.py` the HUD design system (menu, bracketed panels, buttons, terminal log, segmented progress, theme)
+- `glass.py` shared drawing helpers and the icon set used by `hud.py`
 - `ui.py` the main window and dialogs
 - `login_dialog.py` the embedded sign-in window
 

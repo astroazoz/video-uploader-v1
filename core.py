@@ -241,9 +241,28 @@ class QuietLogger:
     def error(self, msg): pass
 
 
+class FileLogger:
+    """Opt-in diagnostics: set the VD_DEBUG_LOG environment variable to a file path to get yt-dlp's verbose log."""
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def _w(self, msg) -> None:
+        try:
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(str(msg) + "\n")
+        except OSError:
+            pass
+
+    debug = info = warning = error = _w
+
+
 def base_opts() -> dict:
     opts = {"quiet": True, "no_warnings": True, "noprogress": True, "noplaylist": True,
             "socket_timeout": 25, "retries": 3, "logger": QuietLogger(), "windowsfilenames": True}
+    if os.environ.get("VD_DEBUG_LOG"):
+        opts["logger"] = FileLogger(os.environ["VD_DEBUG_LOG"])
+        opts["verbose"] = True
     ff = ffmpeg_path()
     if ff:
         opts["ffmpeg_location"] = ff
@@ -286,8 +305,13 @@ def run_ytdlp(plat: str | None, make_opts, work):
         except Exception as first:  # noqa: BLE001
             try:
                 result = attempt(None)
-            except Exception:  # noqa: BLE001
-                raise first  # report the signed-in error: it is the more informative one
+            except Exception as anon:  # noqa: BLE001
+                if any(k in str(anon).lower() for k in ("no video", "no media", "photo", "slideshow")):
+                    # Anonymous access *did* reach the post (it just has no video): the saved session is what's broken.
+                    # Keep the anonymous answer so callers can still handle e.g. photo posts.
+                    ACCOUNTS.mark(plat, "attention")
+                    raise anon
+                raise first  # otherwise the signed-in error is the more informative one
             ACCOUNTS.mark(plat, "attention")
             return result
     return attempt(None)

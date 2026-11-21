@@ -352,6 +352,8 @@ def _icon_path(name: str) -> QPainterPath:
     elif name == "external":
         _poly(p, [(14, 4.5), (19.5, 4.5), (19.5, 10)]); _poly(p, [(19.5, 4.5), (11, 13)])
         _poly(p, [(17.5, 14), (17.5, 19), (5, 19), (5, 6.5), (10, 6.5)])
+    elif name == "clock":
+        p.addEllipse(QRectF(3.5, 3.5, 17, 17)); _poly(p, [(12, 7.5), (12, 12), (15.5, 14)])
     elif name == "prev":
         _poly(p, [(14.5, 6), (8.5, 12), (14.5, 18)])
     elif name == "next":
