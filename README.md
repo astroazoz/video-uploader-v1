@@ -34,3 +34,9 @@ Rebuild regularly to pick up the newest yt-dlp when a site changes.
 - `glass.py` the frosted-glass design system (panels, buttons, progress dial, icons, theme)
 - `ui.py` the main window and dialogs
 - `login_dialog.py` the embedded sign-in window
+
+## Installer
+`build_installer.bat` builds the app and packs it into a single `installer_output\VideoDownloader-Setup-<version>.exe`
+with [Inno Setup](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The installer installs for the
+current user (no admin prompt), adds Start Menu and optional Desktop shortcuts, and registers an uninstaller. Uninstalling never
+deletes your downloaded videos; it only offers to remove the app's own library list, settings and saved account sessions.

@@ -9,4 +9,4 @@ python -m PyInstaller --noconfirm --onedir --windowed --name VideoDownloader --i
   --hidden-import _cffi_backend --exclude-module tkinter --exclude-module customtkinter app.py
 echo.
 echo Done. Open dist\VideoDownloader\VideoDownloader.exe
-pause
+if /i not "%~1"=="nopause" pause

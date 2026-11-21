@@ -11,3 +11,7 @@ library.json
 config.json
 thumbs/
 *.tmp
+
+# installer build output
+installer_output/
+installer_build.log
