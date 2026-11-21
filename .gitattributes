@@ -1,0 +1,5 @@
+# Keep Windows scripts as CRLF no matter how the repo is cloned or downloaded (a LF-only .bat breaks cmd.exe).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.iss text eol=crlf
+*.py text eol=lf

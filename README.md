@@ -18,14 +18,24 @@ Only the session cookie is kept, encrypted with Windows DPAPI for your user acco
 Disconnect deletes it. The app does not bypass privacy settings, and some private or
 download-restricted posts cannot be saved even if you can watch them.
 
-## Build
-Requires Python 3.12 and ffmpeg is bundled via `imageio-ffmpeg`.
+## Just want to use it?
+Download `VideoDownloader-Setup-<version>.exe` from the repository's **Releases** page and run it. No Python needed.
+(Windows may show "Windows protected your PC" because the installer is unsigned: click **More info**, then **Run anyway**.)
 
-    build.bat
+## Build from source
+Requires Windows and Python 3.10+ (3.12 is what it is tested with). Run this from the project folder, in any shell:
+
+    python build.py
 
 The app is written to `dist\VideoDownloader\VideoDownloader.exe` (keep the whole folder together).
-Run from source with `python app.py` after `pip install PySide6 "yt-dlp[curl-cffi]" curl_cffi imageio-ffmpeg`.
-Rebuild regularly to pick up the newest yt-dlp when a site changes.
+Useful options: `--installer` also builds the Setup.exe (needs Inno Setup 6: `winget install JRSoftware.InnoSetup`),
+`--no-pip` skips installing/upgrading the dependencies. Rebuild now and then to pick up the newest yt-dlp when a site changes.
+
+`build.bat` and `build_installer.bat` are only double-click shortcuts for `python build.py` and `python build.py --installer`.
+If a terminal says `build.bat` is "not recognized": PowerShell needs `.\build.bat`, Git Bash needs `cmd //c build.bat`
+(a single slash gets rewritten), or simply use `python build.py`, which behaves the same everywhere.
+
+To run without building: `pip install PySide6 "yt-dlp[curl-cffi]" curl_cffi imageio-ffmpeg`, then `python app.py`.
 
 ## Code layout
 - `app.py` entry point
@@ -36,7 +46,7 @@ Rebuild regularly to pick up the newest yt-dlp when a site changes.
 - `login_dialog.py` the embedded sign-in window
 
 ## Installer
-`build_installer.bat` builds the app and packs it into a single `installer_output\VideoDownloader-Setup-<version>.exe`
+`python build.py --installer` (or `build_installer.bat`) builds the app and packs it into a single `installer_output\VideoDownloader-Setup-<version>.exe`
 with [Inno Setup](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The installer installs for the
 current user (no admin prompt), adds Start Menu and optional Desktop shortcuts, and registers an uninstaller. Uninstalling never
 deletes your downloaded videos; it only offers to remove the app's own library list, settings and saved account sessions.
