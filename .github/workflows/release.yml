@@ -1,0 +1,84 @@
+name: Build and publish installer
+
+# Publishing a new version = pushing a tag:   git tag v3.1.0 && git push origin v3.1.0
+# The workflow builds the Windows installer and attaches it to a GitHub Release for that tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # manual run: builds the installer and keeps it as a downloadable workflow artifact only
+
+permissions:
+  contents: write # needed to create the release and upload files
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Inno Setup
+        run: |
+          if (-not (Get-Command ISCC -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Work out the version
+        id: ver
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart("v") } else { $v = (Select-String -Path version.py -Pattern 'VERSION = "([^"]+)"').Matches[0].Groups[1].Value }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $v"
+
+      - name: Build app + installer (includes a self-check of the built app)
+        run: python build.py --installer --version ${{ steps.ver.outputs.version }}
+
+      - name: Verify the installer installs, runs and uninstalls on a clean machine
+        run: |
+          $setup = (Resolve-Path installer_output\VideoDownloader-Setup.exe).Path
+          $dir = Join-Path $env:RUNNER_TEMP "vd_install"
+          Start-Process $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CURRENTUSER","/DIR=$dir","/NOICONS" -Wait
+          if (-not (Test-Path "$dir\VideoDownloader.exe")) { throw "installed exe missing" }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process "$dir\VideoDownloader.exe" -ArgumentList "--selfcheck","$env:RUNNER_TEMP\sc.json" -Wait -PassThru
+          Get-Content "$env:RUNNER_TEMP\sc.json"
+          if ($p.ExitCode -ne 0) { throw "self-check of the installed app failed" }
+          Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          Start-Sleep 3
+          if (Test-Path "$dir\VideoDownloader.exe") { throw "uninstall left the app behind" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoDownloader-Setup
+          path: |
+            installer_output/VideoDownloader-Setup.exe
+            installer_output/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer_output/VideoDownloader-Setup.exe
+            installer_output/SHA256SUMS.txt
+          generate_release_notes: true
+          body: |
+            ## Install
+            1. Download **VideoDownloader-Setup.exe** below.
+            2. Double-click it and follow the steps (Next, Next, Install).
+            3. Open **Video Downloader** from the desktop or Start Menu.
+
+            No Python, FFmpeg or anything else to install. Windows may show a blue "Windows protected your PC" screen because the installer is not code-signed yet: click **More info**, then **Run anyway**.
+
+            Already installed? The app offers this update by itself (or use **Check for updates** in the app menu). Your settings, library and connected accounts are kept.
+
+            SHA-256 of the installer is in `SHA256SUMS.txt`.

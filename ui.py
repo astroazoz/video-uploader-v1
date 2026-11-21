@@ -9,12 +9,13 @@ from pathlib import Path
 
 import glass as G
 import hud as H
+import updater as UP
 from accounts import ACCOUNTS, PLATFORM_CFG
 from core import (APP_NAME, CFG_FILE, VERSION, PLATFORM_TAG, DownloadTask, FetchTask, Library, extract_url, ffmpeg_path,
                   fmt_count, fmt_duration, fmt_size, load_json, move_to_recycle_bin, open_folder_of, platform_of,
                   save_json)
-from PySide6.QtCore import (QCoreApplication, QEvent, QPoint, QRect, QRectF, QSize, Qt, QThreadPool, QTimer, QUrl,
-                            Signal)
+from PySide6.QtCore import (QCoreApplication, QEvent, QObject, QPoint, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool,
+                            QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QGuiApplication, QKeySequence, QLinearGradient,
                            QPainter, QPen, QShortcut, QTextLayout, QTextOption)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -819,6 +820,143 @@ class AccountsDialog(H.HudDialog):
         self.changed.emit()
 
 
+# ----------------------------------------------------------------------------- updates
+class _UpdSignals(QObject):
+    checked = Signal(dict)
+    progress = Signal(float, float)
+    downloaded = Signal(str)
+    failed = Signal(str)
+
+
+class UpdateCheckTask(QRunnable):
+    """Ask GitHub Releases for the latest version (runs in the background, never blocks the window)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setAutoDelete(False)
+        self.s = _UpdSignals()
+
+    def run(self):
+        try:
+            self.s.checked.emit(UP.check_latest())
+        except Exception as e:  # noqa: BLE001
+            self.s.failed.emit(str(e) or type(e).__name__)
+
+
+class UpdateDownloadTask(QRunnable):
+    def __init__(self, info: dict):
+        super().__init__()
+        self.setAutoDelete(False)
+        self.info, self.cancelled = info, False
+        self.s = _UpdSignals()
+
+    def cancel(self):
+        self.cancelled = True
+
+    def run(self):
+        try:
+            path = UP.download_installer(self.info, progress=lambda d, t: self.s.progress.emit(float(d), float(t)),
+                                         cancelled=lambda: self.cancelled)
+            self.s.downloaded.emit(str(path))
+        except Exception as e:  # noqa: BLE001
+            self.s.failed.emit(str(e) or type(e).__name__)
+
+
+class UpdateDialog(H.HudDialog):
+    """A newer version exists: show what's new and let the user decide. Nothing installs without a click."""
+
+    def __init__(self, win: "MainWindow", info: dict):
+        super().__init__(win)
+        self.win, self.info, self.task, self.busy = win, info, None, False
+        self.setWindowTitle("Update available")
+        self.resize(720, 560)
+        self.setMinimumSize(640, 500)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(30, 24, 30, 22)
+        lay.setSpacing(14)
+        lay.addLayout(dialog_header("Update", f"VERSION {info['version']} IS AVAILABLE"))
+        ver = QLabel(f"<span style='color:{MUTED}'>INSTALLED</span> {VERSION}"
+                     f"&nbsp;&nbsp;&nbsp;<span style='color:{ACCENT}'>&rarr;</span>&nbsp;&nbsp;&nbsp;"
+                     f"<span style='color:{MUTED}'>NEW</span> <span style='color:{ACCENT_HI}'>{info['version']}</span>")
+        ver.setFont(H.mfont(10, 1.0))
+        lay.addWidget(ver)
+        lay.addWidget(section_label("What's new"))
+        from PySide6.QtWidgets import QPlainTextEdit
+        notes = QPlainTextEdit(UP.plain_notes(info.get("notes", "")) or "No release notes were provided.")
+        notes.setReadOnly(True)
+        notes.setFont(H.mfont(9.2, 0.2))
+        notes.setStyleSheet("QPlainTextEdit { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.18); padding: 8px; }")
+        lay.addWidget(notes, 1)
+        self.status = QLabel("Your settings, library and connected accounts are kept. The app closes, updates, then reopens.")
+        self.status.setObjectName("muted")
+        self.status.setFont(H.mfont(8.8, 0.2))
+        self.status.setWordWrap(True)
+        lay.addWidget(self.status)
+        self.strip = H.ProgressStrip()
+        self.strip.hide()
+        lay.addWidget(self.strip)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.skip_btn = H.HudButton("Skip this version", None, "ghost", height=42)
+        self.later_btn = H.HudButton("Later", None, "glass", height=42)
+        self.install_btn = H.HudButton("Install update", "download", "primary", height=42)
+        self.install_btn.setMinimumWidth(190)
+        self.skip_btn.clicked.connect(self._skip)
+        self.later_btn.clicked.connect(self.reject)
+        self.install_btn.clicked.connect(self._install)
+        row.addWidget(self.skip_btn)
+        row.addStretch(1)
+        row.addWidget(self.later_btn)
+        row.addWidget(self.install_btn)
+        lay.addLayout(row)
+
+    def _skip(self):
+        self.win.cfg["update_skip"] = self.info["version"]
+        save_json(CFG_FILE, self.win.cfg)
+        self.accept()
+
+    def _install(self):
+        self.busy = True
+        for b in (self.skip_btn, self.install_btn):
+            b.setEnabled(False)
+        self.strip.show()
+        self.strip.set_progress(0.0)
+        self.status.setText("Downloading the update ...")
+        self.task = UpdateDownloadTask(self.info)
+        self.task.s.progress.connect(self._progress)
+        self.task.s.downloaded.connect(self._downloaded)
+        self.task.s.failed.connect(self._failed)
+        self.win.tasks.add(self.task)
+        self.win.pool.start(self.task)
+
+    def _progress(self, done: float, total: float):
+        if total > 0:
+            self.strip.set_progress(done / total)
+            self.status.setText(f"Downloading the update ...  {fmt_size(int(done))} of {fmt_size(int(total))}")
+
+    def _failed(self, msg: str):
+        self.busy = False
+        self.strip.set_error()
+        self.status.setStyleSheet(f"color: {ERR};")
+        self.status.setText(f"Couldn't install the update: {msg}. You can try again, or download it from the releases page.")
+        self.skip_btn.setEnabled(True)
+        self.install_btn.setEnabled(True)
+        self.install_btn.setText("Try again")
+
+    def _downloaded(self, path: str):
+        self.strip.set_done()
+        self.status.setText("Verified. Starting the installer. The app will close now and reopen when the update is done ...")
+        if UP.launch_installer(Path(path)):
+            QTimer.singleShot(900, QApplication.quit)
+        else:
+            self._failed("Windows could not start the installer")
+
+    def reject(self):
+        if self.task:
+            self.task.cancel()
+        super().reject()
+
+
 # ----------------------------------------------------------------------------- main window
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -842,6 +980,7 @@ class MainWindow(QMainWindow):
         self.is_images = False
         self.lib_tab = "library"
         self._last_msg = ""
+        self._checking_update = False
         self.grid_delegate = GridDelegate(self)
         self.list_delegate = ListDelegate(self)
         self._build()
@@ -858,7 +997,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+L"), self, activated=lambda: self.go("library"))
         QShortcut(QKeySequence("Ctrl+D"), self, activated=lambda: self.go("download"))
         QShortcut(QKeySequence("Esc"), self, activated=self._escape)
+        QShortcut(QKeySequence("Ctrl+U"), self, activated=lambda: self.check_updates(manual=True))
         self.log("info", "session started. paste a link to begin.")
+        QTimer.singleShot(6000, self._auto_update_check)
 
     # ======================================================================= construction
     def _build(self):
@@ -931,6 +1072,11 @@ class MainWindow(QMainWindow):
         info.setFont(H.mfont(8, 0.8))
         info.setStyleSheet(f"color: {DIM};")
         v.addWidget(info)
+        v.addSpacing(8)
+        upd = H.HudButton("Check for updates", None, "ghost", height=30)
+        upd.setToolTip("Look for a newer version on GitHub (Ctrl+U). Nothing installs without your confirmation.")
+        upd.clicked.connect(lambda: self.check_updates(manual=True))
+        v.addWidget(upd, 0, Qt.AlignLeft)
         return box
 
     def _on_nav(self, key: str):
@@ -951,6 +1097,51 @@ class MainWindow(QMainWindow):
     def _escape(self):
         if self.pages.currentIndex() == 0 and self.url_input.text() and not self.busy:
             self.url_input.clear()
+
+    # ---- updates
+    def _auto_update_check(self):
+        """Quiet check at startup (installed app only, at most every 6 hours). Failures are silent."""
+        import time as _t
+        if not (getattr(sys, "frozen", False) or os.environ.get("VD_UPDATE_URL")):
+            return
+        if self.cfg.get("update_auto") is False or _t.time() - float(self.cfg.get("update_last_check", 0)) < 6 * 3600:
+            return
+        self.check_updates(manual=False)
+
+    def check_updates(self, manual: bool = False):
+        if self._checking_update:
+            return
+        self._checking_update = True
+        if manual:
+            self.log("cmd", "check-updates")
+        task = UpdateCheckTask()
+        task.s.checked.connect(lambda info, m=manual: self._on_update_info(info, m))
+        task.s.failed.connect(lambda msg, m=manual: self._on_update_failed(msg, m))
+        self.tasks.add(task)
+        self.pool.start(task)
+
+    def _on_update_info(self, info: dict, manual: bool):
+        import time as _t
+        self._checking_update = False
+        self.cfg["update_last_check"] = _t.time()
+        save_json(CFG_FILE, self.cfg)
+        if info.get("newer"):
+            if not manual and self.cfg.get("update_skip") == info["version"]:
+                return
+            if info.get("installer_url") and info.get("sums_url"):
+                self.log("ok", f"update available: v{info['version']} (installed v{VERSION})")
+                UpdateDialog(self, info).exec()
+            elif manual:
+                self.log("info", f"v{info['version']} was announced but its installer isn't published yet. try again later.")
+        elif manual:
+            self.log("ok", f"you are up to date (v{VERSION})")
+            self.toast.popup(f"you are up to date. version {VERSION}.")
+
+    def _on_update_failed(self, msg: str, manual: bool):
+        self._checking_update = False
+        if manual:
+            self.log("err", f"update check failed: {msg}")
+            self.toast.popup("couldn't check for updates. check your connection.", error=True)
 
     # ---- headers
     def _header(self, tail: str, title: str, close=None):
@@ -1342,7 +1533,8 @@ class MainWindow(QMainWindow):
         def key(k, t):
             return f"<span style='color:{ACCENT_HI}'>[{k}]</span>&nbsp;<span style='color:{MUTED}'>{t}</span>"
         lbl = QLabel("&nbsp;&nbsp;&nbsp;&nbsp;".join((key("ENTER", "FETCH"), key("CTRL+V", "PASTE"), key("ESC", "CLEAR"),
-                                                     key("CTRL+D", "DOWNLOAD"), key("CTRL+L", "LIBRARY"))))
+                                                     key("CTRL+D", "DOWNLOAD"), key("CTRL+L", "LIBRARY"),
+                                                     key("CTRL+U", "UPDATES"))))
         lbl.setFont(H.mfont(8.4, 1.0))
         ver = QLabel(f"VIDEO DOWNLOADER  v{VERSION}")
         ver.setFont(H.mfont(8.2, 1.6))
@@ -1883,6 +2075,21 @@ def webengine_check(outfile: str) -> None:
     Path(outfile).write_text(json.dumps(res), encoding="utf-8")
 
 
+def render_test(png: str) -> None:
+    """Diagnostic: open the real window, wait a moment, save a screenshot of it and quit."""
+    app = QApplication(sys.argv)
+    H.apply_theme(app)
+    win = MainWindow()
+    win.resize(1340, 900)
+    win.show()
+    end = time.time() + 1.6
+    while time.time() < end:
+        app.processEvents()
+        time.sleep(0.02)
+    win.grab().save(png)
+    win.close()
+
+
 def main() -> None:
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)  # required before QApplication when using WebEngine
     if len(sys.argv) > 2 and sys.argv[1] == "--webengine-check":
@@ -1895,8 +2102,16 @@ def main() -> None:
         QGuiApplication(sys.argv)
         H.icon_pixmap(256).toImage().save(sys.argv[2])
         return
+    if len(sys.argv) > 2 and sys.argv[1] == "--selfcheck":
+        import selfcheck
+        sys.exit(selfcheck.main(sys.argv[2]))
+    if len(sys.argv) > 2 and sys.argv[1] == "--render-test":
+        render_test(sys.argv[2])
+        return
     try:
         import ctypes
+        # lets the installer notice a running copy (AppMutex) and close it cleanly before updating
+        globals()["_APP_MUTEX"] = ctypes.windll.kernel32.CreateMutexW(None, False, "VideoDownloaderAppMutex")
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("VideoDownloader.App")
     except Exception:
         pass

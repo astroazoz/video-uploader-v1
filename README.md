@@ -1,15 +1,43 @@
-# video-downloader
+<div align="center">
 
-Windows desktop app (Python + PySide6 + yt-dlp) to preview, download and organise videos from
-X (Twitter), TikTok and Instagram Reels, with a built-in library and player.
+# Video Downloader
 
-Only use it for videos you own or have permission to save.
+**Save videos from X (Twitter), TikTok and Instagram Reels on Windows. No setup, no command line.**
+
+<a href="https://github.com/astroazoz/video-uploader-v1/releases/latest/download/VideoDownloader-Setup.exe"><img src="https://img.shields.io/badge/%E2%AC%87%20Download%20for%20Windows-VideoDownloader--Setup.exe-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" height="52"></a>
+
+[Latest release](https://github.com/astroazoz/video-uploader-v1/releases/latest) · Windows 10 / 11, 64-bit · Free
+
+</div>
+
+## Install in 3 steps
+1. **Click the green Download button above.** (`VideoDownloader-Setup.exe`)
+2. **Open the file** and click **Next, Next, Install**. You can pick the install folder on the way.
+3. **Open Video Downloader** from your desktop or Start Menu, paste a link, press Download.
+
+Everything the app needs (Python, FFmpeg, the downloader engine) is already inside the installer.
+You do not need to install anything else, and you never need a command window.
+
+> **"Windows protected your PC"?** The installer is not code-signed yet, so Windows SmartScreen may show a blue
+> screen the first time. Click **More info**, then **Run anyway**. The file is built by GitHub from this
+> repository's source, and its SHA-256 is published next to it as `SHA256SUMS.txt` on the release page.
+
+## Updates, uninstall, your data
+- **Updates:** the app checks GitHub for a newer version a few seconds after it starts (at most every 6 hours) and
+  asks you first. Nothing is installed without your click. You can also press **Check for updates** in the
+  menu or `Ctrl+U`. Updating keeps your settings, library and connected accounts.
+- **Uninstall:** Windows **Settings > Apps > Video Downloader > Uninstall**. Your downloaded videos are never
+  deleted. The uninstaller only offers to remove the app's own saved data.
+- **Where your data lives:** `%APPDATA%\VideoDownloader` (library list, settings, thumbnails, encrypted account
+  sessions). It is separate from the program folder, which is why updates never touch it.
+
+Only use the app for videos you own or have permission to save.
 
 ## Features
 - Paste a link: platform is detected and a preview (thumbnail, title, length, stats) is shown first
 - Choose quality and format (MP4 H.264, MP4 original codec, or MP3 audio)
 - Photo posts from X are saved at original quality (a folder when there are several) and open in a photo viewer
-- Built-in library (grid or list), in-app player, open folder / copy link / delete to Recycle Bin
+- Built-in library (grid or list), in-app player, hide videos, open folder / copy link / delete to Recycle Bin
 - Optional connected accounts (TikTok, Instagram, X) so posts your own account may view can be saved
 
 ## Connected accounts and privacy
@@ -17,37 +45,57 @@ You sign in on each platform's own login page inside the app. The app never sees
 Only the session cookie is kept, encrypted with Windows DPAPI for your user account (`accounts.py`).
 Disconnect deletes it. The app does not bypass privacy settings, and some private or
 download-restricted posts cannot be saved even if you can watch them.
+The only network traffic besides the downloads you start is the update check to `api.github.com`
+(turn it off by setting `"update_auto": false` in `%APPDATA%\VideoDownloader\config.json`).
 
-## Just want to use it?
-Download `VideoDownloader-Setup-<version>.exe` from the repository's **Releases** page and run it. No Python needed.
-(Windows may show "Windows protected your PC" because the installer is unsigned: click **More info**, then **Run anyway**.)
+---
 
-## Build from source
+## For developers
+
+### Build from source
 Requires Windows and Python 3.10+ (3.12 is what it is tested with). Run this from the project folder, in any shell:
 
     python build.py
 
 The app is written to `dist\VideoDownloader\VideoDownloader.exe` (keep the whole folder together).
-Useful options: `--installer` also builds the Setup.exe (needs Inno Setup 6: `winget install JRSoftware.InnoSetup`),
-`--no-pip` skips installing/upgrading the dependencies. Rebuild now and then to pick up the newest yt-dlp when a site changes.
+Useful options: `--installer` also builds `installer_output\VideoDownloader-Setup.exe` and `SHA256SUMS.txt`
+(needs Inno Setup 6: `winget install JRSoftware.InnoSetup`), `--version 3.1.0` stamps a version,
+`--no-pip` skips installing the dependencies, `--no-prune` keeps every Qt file.
+Every build ends with the app's own self-check (`VideoDownloader.exe --selfcheck result.json`), which verifies the
+downloader engine, FFmpeg encoders, Qt modules, encryption and video decoding.
+Rebuild now and then to pick up the newest yt-dlp when a site changes.
 
 `build.bat` and `build_installer.bat` are only double-click shortcuts for `python build.py` and `python build.py --installer`.
-If a terminal says `build.bat` is "not recognized": PowerShell needs `.\build.bat`, Git Bash needs `cmd //c build.bat`
-(a single slash gets rewritten), or simply use `python build.py`, which behaves the same everywhere.
+If a terminal says `build.bat` is "not recognized": PowerShell needs `.\build.bat`, Git Bash needs `cmd //c build.bat`,
+or simply use `python build.py`, which behaves the same everywhere.
 
-To run without building: `pip install PySide6 "yt-dlp[curl-cffi]" curl_cffi imageio-ffmpeg`, then `python app.py`.
+To run without building: `pip install -r requirements.txt`, then `python app.py`.
 
-## Code layout
+### Publishing a release
+Releases are fully automatic. Push a version tag and GitHub Actions (`.github/workflows/release.yml`) builds the
+installer, tests that it installs, runs and uninstalls, and publishes it with `SHA256SUMS.txt` to GitHub Releases:
+
+    git tag v3.1.0
+    git push origin v3.1.0
+
+The version comes from the tag (the workflow rewrites `version.py`). The asset names `VideoDownloader-Setup.exe` and
+`SHA256SUMS.txt` are fixed: the README download link and the in-app updater depend on them.
+
+### Installer
+Built with [Inno Setup](https://jrsoftware.org/isinfo.php) from `installer.iss`: installs for the current user (no admin
+prompt; "for all users" is offered), lets you choose the folder, adds Start Menu and optional Desktop shortcuts, closes a
+running copy before updating, replaces program files cleanly on update, and registers an uninstaller.
+`prune.py` removes Qt files the app provably never loads (unreachable DLLs, devtools, translations) to keep the installer small.
+
+### Code layout
 - `app.py` entry point
+- `version.py` the single app version
 - `core.py` link handling, yt-dlp fetch and download tasks, library storage (no UI)
 - `accounts.py` encrypted account sessions and cookie files
+- `updater.py` GitHub Releases update check, verified download (SHA-256, GitHub hosts only)
+- `selfcheck.py` headless self-test of an installed copy
 - `hud.py` the HUD design system (menu, bracketed panels, buttons, terminal log, segmented progress, theme)
 - `glass.py` shared drawing helpers and the icon set used by `hud.py`
 - `ui.py` the main window and dialogs
 - `login_dialog.py` the embedded sign-in window
-
-## Installer
-`python build.py --installer` (or `build_installer.bat`) builds the app and packs it into a single `installer_output\VideoDownloader-Setup-<version>.exe`
-with [Inno Setup](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The installer installs for the
-current user (no admin prompt), adds Start Menu and optional Desktop shortcuts, and registers an uninstaller. Uninstalling never
-deletes your downloaded videos; it only offers to remove the app's own library list, settings and saved account sessions.
+- `build.py`, `prune.py`, `installer.iss`, `requirements.txt` packaging

@@ -16,3 +16,5 @@ thumbs/
 installer_output/
 installer_build.log
 *.log
+build_log.txt
+icon.ico

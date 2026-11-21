@@ -1,0 +1,9 @@
+# Everything needed to run from source and to build the installer. Windows, Python 3.10+ (3.12 recommended).
+PySide6>=6.7
+yt-dlp[curl-cffi]
+curl_cffi
+imageio-ffmpeg
+certifi
+# build-time only
+pyinstaller
+pefile

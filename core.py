@@ -19,7 +19,7 @@ from PySide6.QtCore import QObject, QRunnable, Qt, Signal
 from PySide6.QtGui import QImage
 
 APP_NAME = "video-downloader"
-VERSION = "3.0"
+from version import VERSION  # noqa: E402  (single source of truth; see version.py)
 DATA_DIR = Path(os.getenv("APPDATA") or Path.home()) / "VideoDownloader"
 THUMB_DIR = DATA_DIR / "thumbs"
 LIB_FILE = DATA_DIR / "library.json"
