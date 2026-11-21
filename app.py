@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QDialog, Q
                                QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 
 APP_NAME = "video-downloader"
-VERSION = "2.2"
+VERSION = "2.3"
 DATA_DIR = Path(os.getenv("APPDATA") or Path.home()) / "VideoDownloader"
 THUMB_DIR = DATA_DIR / "thumbs"
 LIB_FILE = DATA_DIR / "library.json"
@@ -600,6 +600,15 @@ class Library:
             except OSError:
                 pass
 
+    def set_hidden(self, entry_id: str, hidden: bool) -> bool:
+        """Hide/unhide a library entry. Only the library record changes: the video file is never touched."""
+        for x in self.items:
+            if x["id"] == entry_id:
+                x["hidden"] = bool(hidden)
+                save_json(LIB_FILE, self.items)
+                return True
+        return False
+
 
 def mono(pt: float, bold: bool = False) -> QFont:
     f = QFont(MONO)
@@ -652,6 +661,19 @@ def entry_date(e: dict) -> str:
         return ""
 
 
+def draw_action(p: QPainter, rect: QRect, hidden: bool, hot: bool) -> None:
+    """Small HIDE / UNHIDE button drawn on a library card or row."""
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setBrush(QColor(12, 14, 13, 230))
+    p.setPen(QPen(QColor(ACCENT if hot else BORDER_HI), 1))
+    p.drawRoundedRect(rect, 3, 3)
+    p.setPen(QColor(ACCENT if hot else TEXT))
+    p.setFont(mono(8, True))
+    p.drawText(rect, Qt.AlignCenter, "UNHIDE" if hidden else "HIDE")
+    p.restore()
+
+
 class GridDelegate(QStyledItemDelegate):
     MIN_W = 224
     W = 228  # updated by MainWindow so cards fill each row exactly
@@ -664,8 +686,16 @@ class GridDelegate(QStyledItemDelegate):
     def H(self) -> int:
         return self.thumb_h(self.W) + 92
 
+    hover_id = None  # id of the entry whose HIDE button the mouse is over
+
     def sizeHint(self, option, index):
         return QSize(self.W, self.H)
+
+    @staticmethod
+    def action_rect(item_rect: QRect, hidden: bool) -> QRect:
+        r = item_rect.adjusted(4, 4, -4, -4)
+        w = 72 if hidden else 58
+        return QRect(r.x() + 8 + (r.width() - 16) - w - 6, r.y() + 14, w, 22)
 
     def paint(self, p: QPainter, opt, index):
         e = index.data(Qt.UserRole)
@@ -682,6 +712,7 @@ class GridDelegate(QStyledItemDelegate):
         tr = QRect(r.x() + 8, r.y() + 8, r.width() - 16, self.thumb_h(r.width() + 8))
         p.drawPixmap(tr.topLeft(), framed_pixmap(e.get("thumb"), tr.width(), tr.height(), 2))
         draw_tag(p, tr.x() + 6, tr.y() + 6, PLATFORM_TAG.get(e.get("platform"), "VIDEO"))
+        draw_action(p, self.action_rect(opt.rect, bool(e.get("hidden"))), bool(e.get("hidden")), e.get("id") == self.hover_id)
         dur = fmt_duration(e.get("duration")) or ("MP3" if e.get("kind") == "audio" else "")
         if dur:
             p.setFont(mono(8, True))
@@ -712,9 +743,15 @@ class GridDelegate(QStyledItemDelegate):
 class ListDelegate(QStyledItemDelegate):
     """`ls -l` style row: thumbnail, title + file name, then aligned columns."""
     H = 76
+    hover_id = None
 
     def sizeHint(self, option, index):
         return QSize(100, self.H)
+
+    @staticmethod
+    def action_rect(item_rect: QRect, hidden: bool) -> QRect:
+        r = item_rect.adjusted(2, 2, -2, -2)
+        return QRect(r.right() - 14 - 84, r.y() + (r.height() - 28) // 2, 84, 28)
 
     def paint(self, p: QPainter, opt, index):
         e = index.data(Qt.UserRole)
@@ -732,13 +769,13 @@ class ListDelegate(QStyledItemDelegate):
 
         cols = [(86, PLATFORM_TAG.get(e.get("platform"), "VIDEO")), (70, fmt_duration(e.get("duration")) or ("mp3" if e.get("kind") == "audio" else "-")),
                 (84, fmt_size(e.get("size")) or "-"), (96, entry_date(e) or "-")]
-        x = r.right() - 14 - sum(w for w, _ in cols)
+        x = r.right() - 14 - 100 - sum(w for w, _ in cols)
         p.setFont(mono(9))
         for w, text in cols:
             p.setPen(QColor(MUTED if text not in PLATFORM_TAG.values() else TEXT))
             p.drawText(QRect(x, r.y(), w, r.height()), Qt.AlignVCenter | Qt.AlignLeft, text)
             x += w
-        tx, tw = tr.right() + 16, max(60, r.right() - 14 - sum(w for w, _ in cols) - (tr.right() + 16) - 12)
+        tx, tw = tr.right() + 16, max(60, r.right() - 14 - 100 - sum(w for w, _ in cols) - (tr.right() + 16) - 12)
         p.setFont(mono(10, True))
         p.setPen(QColor(ERR if missing else TEXT))
         fm = p.fontMetrics()
@@ -748,6 +785,7 @@ class ListDelegate(QStyledItemDelegate):
         p.setPen(QColor(MUTED))
         fm2 = p.fontMetrics()
         p.drawText(QRect(tx, r.y() + 38, tw, 20), Qt.AlignVCenter | Qt.AlignLeft, fm2.elidedText(e["filename"], Qt.ElideMiddle, tw))
+        draw_action(p, self.action_rect(opt.rect, bool(e.get("hidden"))), bool(e.get("hidden")), e.get("id") == self.hover_id)
         p.restore()
 
 
@@ -837,10 +875,57 @@ class Skeleton(QWidget):
 
 class Gallery(QListWidget):
     resized = Signal()
+    hideClicked = Signal(object)  # emits the library entry whose HIDE / UNHIDE button was clicked
+
+    def __init__(self):
+        super().__init__()
+        self._press_entry = None
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self.resized.emit()
+
+    def _action_hit(self, pos):
+        it = self.itemAt(pos)
+        if not it:
+            return None
+        entry = it.data(Qt.UserRole)
+        rect = self.itemDelegate().action_rect(self.visualRect(self.indexFromItem(it)), bool(entry.get("hidden")))
+        return entry if rect.contains(pos) else None
+
+    def mousePressEvent(self, ev):
+        self._press_entry = self._action_hit(ev.position().toPoint()) if ev.button() == Qt.LeftButton else None
+        if self._press_entry is None:
+            super().mousePressEvent(ev)
+        else:
+            ev.accept()
+
+    def mouseReleaseEvent(self, ev):
+        if self._press_entry is not None:
+            pressed, self._press_entry = self._press_entry, None
+            hit = self._action_hit(ev.position().toPoint())
+            if hit and hit["id"] == pressed["id"]:
+                self.hideClicked.emit(pressed)
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        hit = self._action_hit(ev.position().toPoint())
+        d = self.itemDelegate()
+        new = hit["id"] if hit else None
+        if d.hover_id != new:
+            d.hover_id = new
+            self.viewport().update()
+        self.viewport().setCursor(Qt.PointingHandCursor if hit else Qt.ArrowCursor)
+        super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        d = self.itemDelegate()
+        if d.hover_id is not None:
+            d.hover_id = None
+            self.viewport().update()
+        super().leaveEvent(ev)
 
 
 class ClickableVideo(QVideoWidget):
@@ -989,6 +1074,9 @@ class PlayerDialog(QDialog):
             b.clicked.connect(fn)
             btns.addWidget(b)
         btns.addStretch(1)
+        hb = term_button("UNHIDE" if entry.get("hidden") else "HIDE")
+        hb.clicked.connect(self.toggle_hide)
+        btns.addWidget(hb)
         d = term_button("DELETE", "danger")
         d.clicked.connect(self.delete)
         c = term_button("CLOSE")
@@ -1039,6 +1127,11 @@ class PlayerDialog(QDialog):
     def release(self):
         self.player.stop()
         self.player.setSource(QUrl())
+
+    def toggle_hide(self):
+        self.release()
+        self.win.toggle_hidden(self.entry)
+        self.accept()
 
     def delete(self):
         if self.win.delete_entry(self.entry, self, before=self.release):
@@ -1203,7 +1296,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(app_icon())
         self.resize(1120, 920)
-        self.setMinimumSize(1000, 800)
+        self.setMinimumSize(1000, 840)
         self.cfg = load_json(CFG_FILE, {})
         self.save_dir = self.cfg.get("save_dir") or str(Path.home() / "Videos" / "Video Downloader")
         self.view_mode = self.cfg.get("view", "grid")
@@ -1216,6 +1309,7 @@ class MainWindow(QMainWindow):
         self.dl_task: DownloadTask | None = None
         self.busy = False
         self.last_clip = None
+        self.lib_tab = "library"
         self.blink = True
         self.grid_delegate = GridDelegate(self)
         self.list_delegate = ListDelegate(self)
@@ -1328,8 +1422,30 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._page_preview())
         self.stack.addWidget(self._page_error())
 
+        # library tabs: LIBRARY on the left, HIDDEN on the opposite (right) side
+        tabs = QHBoxLayout()
+        tabs.setSpacing(0)
+        self.tab_lib = term_button("LIBRARY", "tab")
+        self.tab_hid = term_button("HIDDEN", "tab")
+        tgrp = QButtonGroup(self)
+        tgrp.setExclusive(True)
+        for b in (self.tab_lib, self.tab_hid):
+            b.setCheckable(True)
+            b.setMinimumWidth(130)
+            tgrp.addButton(b)
+        self.tab_lib.setChecked(True)
+        self.tab_lib.clicked.connect(lambda: self.set_tab("library"))
+        self.tab_hid.clicked.connect(lambda: self.set_tab("hidden"))
+        tabs.addWidget(self.tab_lib)
+        tabs.addStretch(1)
+        tabs.addWidget(self.tab_hid)
+        tabbox = QVBoxLayout()
+        tabbox.setSpacing(0)
+        tabbox.addLayout(tabs)
+        tabbox.addWidget(hline())
+        v.addLayout(tabbox)
+
         # library toolbar
-        v.addWidget(hline())
         lh = QHBoxLayout()
         lh.setSpacing(8)
         self.lib_title = QLabel("")
@@ -1382,6 +1498,7 @@ class MainWindow(QMainWindow):
         self.listw.customContextMenuRequested.connect(self.lib_menu)
         self.listw.itemClicked.connect(lambda it: self.open_entry(it.data(Qt.UserRole)))
         self.listw.resized.connect(self._relayout_grid)
+        self.listw.hideClicked.connect(lambda e: QTimer.singleShot(0, lambda: self.toggle_hidden(e)))
         self.lib_stack.addWidget(self.lib_empty)
         self.lib_stack.addWidget(self.listw)
         v.addWidget(self.lib_stack, 1)
@@ -1800,13 +1917,33 @@ class MainWindow(QMainWindow):
         self.listw.setSpacing(6 if grid else 2)
         self.listw.setItemDelegate(self.grid_delegate if grid else self.list_delegate)
 
+    def set_tab(self, tab: str):
+        self.lib_tab = tab
+        (self.tab_hid if tab == "hidden" else self.tab_lib).setChecked(True)
+        self.refresh_library()
+
+    def toggle_hidden(self, e: dict) -> None:
+        """Hide a video from the main library (or restore it). Only the library record changes."""
+        hide = not e.get("hidden")
+        if self.lib.set_hidden(e["id"], hide):
+            self.refresh_library()
+            self.toast.popup("hidden. find it in the HIDDEN tab. the file is untouched." if hide
+                             else "restored to your library")
+
     def refresh_library(self):
         q = self.search.text().strip().lower()
         plat = self.filter.currentText()
         grid = self.view_mode == "grid"
+        hidden_tab = self.lib_tab == "hidden"
+        n_hidden = sum(1 for x in self.lib.items if x.get("hidden"))
+        n_visible = len(self.lib.items) - n_hidden
+        self.tab_lib.setText(f"LIBRARY  {n_visible}")
+        self.tab_hid.setText(f"HIDDEN  {n_hidden}")
         self.listw.clear()
-        total = len(self.lib.items)
+        total = n_hidden if hidden_tab else n_visible
         for e in self.lib.items:
+            if bool(e.get("hidden")) != hidden_tab:
+                continue
             if plat != "all" and e.get("platform") != plat:
                 continue
             hay = f"{e.get('title','')} {e.get('uploader','')} {e.get('filename','')} {e.get('platform','')}".lower()
@@ -1820,13 +1957,20 @@ class MainWindow(QMainWindow):
         shown = self.listw.count()
         if grid:
             self._relayout_grid()
-        self.lib_title.setText(f"<span style='color:{ACCENT}'>$</span> <span style='color:{TEXT};font-weight:bold'>ls library/</span>"
+        name = "hidden" if hidden_tab else "library"
+        self.lib_title.setText(f"<span style='color:{ACCENT}'>$</span> <span style='color:{TEXT};font-weight:bold'>ls {name}/</span>"
                                f"<span style='color:{MUTED}'>&nbsp;&nbsp;{shown if shown == total else f'{shown}/{total}'} item{'s' if shown != 1 else ''}</span>")
         if shown:
             self.lib_stack.setCurrentIndex(1)
         else:
             self.lib_stack.setCurrentIndex(0)
-            if total == 0:
+            if total == 0 and hidden_tab:
+                self.lib_empty.setText(
+                    f"<p style='line-height:170%'><span style='color:{MUTED}'>total 0</span><br>"
+                    f"<span style='color:{DIM}'>(nothing hidden)</span><br><br>"
+                    f"<span style='color:{ACCENT}'>&gt;</span> <span style='color:{TEXT}'>use HIDE on any video to move it here.</span><br>"
+                    f"<span style='color:{MUTED}'>hidden videos stay saved on your PC. UNHIDE puts them back in the library.</span></p>")
+            elif total == 0:
                 self.lib_empty.setText(
                     f"<p style='line-height:170%'><span style='color:{MUTED}'>total 0</span><br>"
                     f"<span style='color:{DIM}'>(empty)</span><br><br>"
@@ -1885,6 +2029,8 @@ class MainWindow(QMainWindow):
         m.addAction("play", lambda: self.open_entry(e))
         m.addAction("open folder", lambda: open_folder_of(e["path"]))
         m.addAction("copy original link", lambda: self.copy_link(e))
+        m.addAction("unhide (restore to library)" if e.get("hidden") else "hide from library",
+                    lambda: self.toggle_hidden(e))
         m.addSeparator()
         m.addAction("delete...", lambda: self.delete_entry(e))
         m.exec(self.listw.viewport().mapToGlobal(pos))
@@ -1922,6 +2068,10 @@ QPushButton#danger:hover {{ background: {ERR}; color: {BG}; border-color: {ERR};
 QPushButton#segL {{ border-top-right-radius: 0; border-bottom-right-radius: 0; padding: 0 14px; }}
 QPushButton#segR {{ border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none; padding: 0 14px; }}
 QPushButton#segL:checked, QPushButton#segR:checked {{ color: {ACCENT}; border: 1px solid {ACCENT}; background: {PANEL}; }}
+QPushButton#tab {{ background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 0 8px; color: {MUTED}; font-size: 10pt; letter-spacing: 1px; }}
+QPushButton#tab:hover {{ color: {TEXT}; border-color: transparent; }}
+QPushButton#tab:checked {{ color: {ACCENT}; border-bottom: 2px solid {ACCENT}; background: transparent; }}
+QPushButton#tab:pressed {{ background: transparent; padding: 2px 8px 0 8px; }}
 QPushButton#acct {{ padding: 0 12px; font-size: 8.5pt; color: {MUTED}; border-color: {BORDER_HI}; }}
 QPushButton#acct[kind="on"] {{ color: {ACCENT}; border-color: {ACCENT}; }}
 QPushButton#acct[kind="warn"] {{ color: {ERR}; border-color: #5a332f; }}
