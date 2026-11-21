@@ -25,3 +25,11 @@ Requires Python 3.12 and ffmpeg is bundled via `imageio-ffmpeg`.
 The app is written to `dist\VideoDownloader\VideoDownloader.exe` (keep the whole folder together).
 Run from source with `python app.py` after `pip install PySide6 "yt-dlp[curl-cffi]" curl_cffi imageio-ffmpeg`.
 Rebuild regularly to pick up the newest yt-dlp when a site changes.
+
+## Code layout
+- `app.py` entry point
+- `core.py` link handling, yt-dlp fetch and download tasks, library storage (no UI)
+- `accounts.py` encrypted account sessions and cookie files
+- `glass.py` the frosted-glass design system (panels, buttons, progress dial, icons, theme)
+- `ui.py` the main window and dialogs
+- `login_dialog.py` the embedded sign-in window
