@@ -72,7 +72,7 @@ jobs:
             installer_output/SHA256SUMS.txt
           generate_release_notes: true
           body: |
-            ## Install
+            ## Install (not the "Source code" files below: those are for programmers and need Python)
             1. Download **VideoDownloader-Setup.exe** below.
             2. Double-click it and follow the steps (Next, Next, Install).
             3. Open **Video Downloader** from the desktop or Start Menu.

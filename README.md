@@ -18,6 +18,11 @@
 Everything the app needs (Python, FFmpeg, the downloader engine) is already inside the installer.
 You do not need to install anything else, and you never need a command window.
 
+> **Do not download "Source code" or the repository ZIP, and do not use the green *Code* button.** That is the
+> programmer's copy and it asks for Python ("Python was not found..."). Use the green **Download** button above, or
+> if you already have the repository folder, just **double-click `INSTALL.bat`**: it fetches and starts the installer
+> for you (no Python needed).
+
 > **"Windows protected your PC"?** The installer is not code-signed yet, so Windows SmartScreen may show a blue
 > screen the first time. Click **More info**, then **Run anyway**. The file is built by GitHub from this
 > repository's source, and its SHA-256 is published next to it as `SHA256SUMS.txt` on the release page.
@@ -65,9 +70,8 @@ Every build ends with the app's own self-check (`VideoDownloader.exe --selfcheck
 downloader engine, FFmpeg encoders, Qt modules, encryption and video decoding.
 Rebuild now and then to pick up the newest yt-dlp when a site changes.
 
-`build.bat` and `build_installer.bat` are only double-click shortcuts for `python build.py` and `python build.py --installer`.
-If a terminal says `build.bat` is "not recognized": PowerShell needs `.\build.bat`, Git Bash needs `cmd //c build.bat`,
-or simply use `python build.py`, which behaves the same everywhere.
+`dev\build.bat` and `dev\build_installer.bat` are developer-only shortcuts for `python build.py` and
+`python build.py --installer`; using `python build.py` directly behaves the same in every shell.
 
 To run without building: `pip install -r requirements.txt`, then `python app.py`.
 
@@ -98,4 +102,5 @@ running copy before updating, replaces program files cleanly on update, and regi
 - `glass.py` shared drawing helpers and the icon set used by `hud.py`
 - `ui.py` the main window and dialogs
 - `login_dialog.py` the embedded sign-in window
-- `build.py`, `prune.py`, `installer.iss`, `requirements.txt` packaging
+- `INSTALL.bat` end-user helper: downloads and starts the latest installer (no Python)
+- `build.py`, `prune.py`, `installer.iss`, `requirements.txt`, `dev/` packaging
