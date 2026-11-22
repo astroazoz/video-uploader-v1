@@ -26,9 +26,8 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 DisableDirPage=no
 UsePreviousAppDir=yes
-; Installs for the current user by default (no administrator prompt); the wizard offers "for all users".
+; Installs for the current user: no administrator prompt and no "for all users?" question for the person installing.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0

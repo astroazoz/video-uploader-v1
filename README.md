@@ -87,7 +87,7 @@ The version comes from the tag (the workflow rewrites `version.py`). The asset n
 
 ### Installer
 Built with [Inno Setup](https://jrsoftware.org/isinfo.php) from `installer.iss`: installs for the current user (no admin
-prompt; "for all users" is offered), lets you choose the folder, adds Start Menu and optional Desktop shortcuts, closes a
+prompt, no questions about install mode), lets you choose the folder, adds Start Menu and optional Desktop shortcuts, closes a
 running copy before updating, replaces program files cleanly on update, and registers an uninstaller.
 `prune.py` removes Qt files the app provably never loads (unreachable DLLs, devtools, translations) to keep the installer small.
 
